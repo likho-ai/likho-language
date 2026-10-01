@@ -38,7 +38,8 @@ language policy decodes Urdu calls as Hindi so that the text arrives in Devanaga
 
 ```python
 from likho_hinglish import Transliterator
-Transliterator({"त्रिफला": "Triphala"}).text("त्रिफला लीजिए")   # 'Triphala lijiye'
+
+Transliterator({"त्रिफला": "Triphala"}).text("त्रिफला लीजिए")  # 'Triphala lijiye'
 ```
 
 ## Run it
