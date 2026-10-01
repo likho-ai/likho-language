@@ -25,16 +25,17 @@ the Roman-letter Hindi people type in chat:
 
 1. **The workspace's spellings** win: `त्रिफला → Triphala`. A source with spaces is a phrase and
    is replaced as a whole, on word boundaries, longest first.
-2. **The built-in table** (`src/likho_hinglish/words.py`) covers common words and English
+2. **The built-in table** (`packages/likho-hinglish/src/likho_hinglish/words.py`) covers common words and English
    loanwords (`कैप्सूल → capsule`).
-3. **The rules** (`src/likho_hinglish/rules.py`) handle every other word: schwa deletion
+3. **The rules** (`packages/likho-hinglish/src/likho_hinglish/rules.py`) handle every other word: schwa deletion
    (`समझाने → samjhane`), long vowels only in closed syllables (`बात → baat`, `करना → karna`),
    nasals, nukta letters.
 
 Latin text, digits and punctuation pass through. Text in Arabic script is refused: the
 language policy decodes Urdu calls as Hindi so that the text arrives in Devanagari.
 
-`likho_hinglish` has no dependencies and can be used on its own:
+`likho_hinglish` is its own package (`packages/likho-hinglish`) with no dependencies, so the speech
+engine can use the same rules offline:
 
 ```python
 from likho_hinglish import Transliterator

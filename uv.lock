@@ -6,6 +6,12 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+members = [
+    "likho-hinglish",
+    "likho-language",
+]
+
 [[package]]
 name = "alembic"
 version = "1.20.0"
@@ -429,6 +435,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "likho-hinglish"
+version = "0.1.0"
+source = { editable = "packages/likho-hinglish" }
+
+[[package]]
 name = "likho-language"
 version = "0.1.0"
 source = { editable = "." }
@@ -438,6 +449,7 @@ dependencies = [
     { name = "grpcio" },
     { name = "grpcio-health-checking" },
     { name = "likho-contracts" },
+    { name = "likho-hinglish" },
     { name = "nats-py" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -459,6 +471,7 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.70" },
     { name = "grpcio-health-checking", specifier = ">=1.70" },
     { name = "likho-contracts", git = "https://github.com/likho-ai/likho-contracts?subdirectory=packages%2Fpython&tag=v0.1.0" },
+    { name = "likho-hinglish", editable = "packages/likho-hinglish" },
     { name = "nats-py", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },

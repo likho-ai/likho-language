@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "likho-contracts",
+    "likho-hinglish",
     "grpcio>=1.70",
     "grpcio-health-checking>=1.70",
     "sqlalchemy[asyncio]>=2.0.36",
@@ -23,7 +24,11 @@ dependencies = [
 likho-language = "likho_language.__main__:main"
 likho-language-seed = "likho_language.seed:main"
 
+[tool.uv.workspace]
+members = ["packages/*"]
+
 [tool.uv.sources]
+likho-hinglish = { workspace = true }
 likho-contracts = { git = "https://github.com/likho-ai/likho-contracts", tag = "v0.1.0", subdirectory = "packages/python" }
 
 [dependency-groups]
@@ -36,12 +41,12 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/likho_hinglish", "src/likho_language"]
+packages = ["src/likho_language"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "packages/likho-hinglish/src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "N", "RUF", "ASYNC"]
@@ -54,7 +59,7 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src"]
+files = ["src", "packages/likho-hinglish/src"]
 check_untyped_defs = true
 no_implicit_optional = true
 warn_unused_ignores = true
