@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://likho-ai.github.io/likho-contracts/events/likho.vocabulary.updated.v1.schema.json",
+  "title": "The glossary or the spelling table changed",
+  "description": "data of likho.vocabulary.updated.v1; published by likho-language on NATS subject likho.vocabulary.updated",
+  "type": "object",
+  "required": [
+    "workspace_id",
+    "kind",
+    "version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "workspace_id": {
+      "type": "string",
+      "pattern": "^wsp_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "kind": {
+      "enum": [
+        "glossary",
+        "spellings",
+        "policy"
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}
