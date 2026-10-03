@@ -8,3 +8,5 @@ tests
 .mypy_cache
 .ruff_cache
 dist
+.env.local
+.env.*.local
