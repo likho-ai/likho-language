@@ -18,6 +18,7 @@ from likho_language.db import make_engine, make_sessions, upgrade
 from likho_language.events import NatsPublisher
 from likho_language.grpc_server import LanguageServicer
 from likho_language.health import start_health_server
+from likho_language.metrics import MetricsInterceptor, shared
 from likho_language.settings import Settings
 from likho_language.vocabulary import VocabularyStore
 
@@ -58,15 +59,19 @@ async def serve(settings: Settings, stop: asyncio.Event | None = None) -> None:
     engine = make_engine(settings.database_url)
     store = VocabularyStore(make_sessions(engine), ttl_seconds=settings.vocabulary_ttl_seconds)
 
+    metrics = shared(__version__, settings.otel_exporter_otlp_endpoint)
     publisher = NatsPublisher(settings.nats_url)
     try:
-        await publisher.connect()
+        await publisher.connect(settings.nats_connect_timeout_seconds)
         log.info("connected to the event bus at %s", settings.nats_url)
     except Exception:
         # The service still answers; a change is then visible through the version in each response.
         log.exception("event bus not reachable at %s; changes will not be announced", settings.nats_url)
 
-    server = grpc.aio.server(options=[("grpc.max_receive_message_length", 8 * 1024 * 1024)])
+    server = grpc.aio.server(
+        options=[("grpc.max_receive_message_length", 8 * 1024 * 1024)],
+        interceptors=[MetricsInterceptor(metrics)],
+    )
     language_pb2_grpc.add_LanguageServiceServicer_to_server(LanguageServicer(store, publisher), server)
     health_servicer = health.aio.HealthServicer()
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
@@ -80,7 +85,7 @@ async def serve(settings: Settings, stop: asyncio.Event | None = None) -> None:
             await connection.execute(text("select 1"))
         return True
 
-    http = await start_health_server(settings.http_port, ready)
+    http = await start_health_server(settings.http_port, ready, metrics.scrape)
     log.info("likho-language %s: gRPC on %d, health on %d", __version__, settings.grpc_port, settings.http_port)
 
     await stop.wait()
@@ -92,6 +97,7 @@ async def serve(settings: Settings, stop: asyncio.Event | None = None) -> None:
     await http.wait_closed()
     await publisher.close()
     await engine.dispose()
+    await asyncio.to_thread(metrics.flush)
 
 
 async def _run() -> None:

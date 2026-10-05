@@ -51,11 +51,27 @@ class NatsPublisher:
         self._nc: Any = None
         self._js: Any = None
 
-    async def connect(self) -> None:
+    async def connect(self, timeout_seconds: float = 0.0) -> None:
+        """Connects, trying again while NATS is not there yet, for `timeout_seconds` (0 = one try)."""
+        import asyncio
+        import logging
+
         import nats
 
-        self._nc = await nats.connect(self._url, name=SOURCE, max_reconnect_attempts=-1)
-        self._js = self._nc.jetstream()
+        log = logging.getLogger(__name__)
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        wait = 1.0
+        while True:
+            try:
+                self._nc = await nats.connect(self._url, name=SOURCE, max_reconnect_attempts=-1, connect_timeout=5)
+                self._js = self._nc.jetstream()
+                return
+            except Exception as error:
+                if asyncio.get_running_loop().time() + wait > deadline:
+                    raise
+                log.warning("event bus not ready (%s); trying again in %.0f s", error, wait)
+                await asyncio.sleep(wait)
+                wait = min(wait * 2, 10.0)
 
     @property
     def connected(self) -> bool:

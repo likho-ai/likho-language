@@ -47,6 +47,7 @@ async def test_health(service: Service) -> None:
     assert reply.status == health_pb2.HealthCheckResponse.SERVING
     assert await _http_status(service.settings.http_port, "/healthz") == 200
     assert await _http_status(service.settings.http_port, "/readyz") == 200
+    assert await _http_status(service.settings.http_port, "/metrics") == 200
     assert await _http_status(service.settings.http_port, "/other") == 404
 
 

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # Defaults match the likho-infra local stack.
     database_url: str = "postgresql+asyncpg://likho_language:likho_language@localhost:5433/likho_language"
     nats_url: str = "nats://localhost:4222"
+    # How long the start keeps trying to reach NATS before going on without it.
+    nats_connect_timeout_seconds: float = 120.0
+    # Metrics are always at GET /metrics (Prometheus text); set this to also push them (OTLP/HTTP, e.g. http://localhost:4318).
+    otel_exporter_otlp_endpoint: str = ""
 
     # Create or update the tables when the service starts.
     migrate_on_start: bool = True

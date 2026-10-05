@@ -88,6 +88,8 @@ ConfigMaps and Secrets.
 | `HTTP_PORT` | `4030` | `GET /healthz` (alive), `GET /readyz` (the database answers) |
 | `DATABASE_URL` | local stack, database `likho_language` | PostgreSQL through asyncpg |
 | `NATS_URL` | `nats://localhost:4222` | Event bus |
+| `NATS_CONNECT_TIMEOUT_SECONDS` | `120` | How long the start keeps trying to reach NATS before going on without it |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | empty | Also push the metrics there (OTLP/HTTP); `GET /metrics` (calls by method and outcome with how long they took) is always on |
 | `MIGRATE_ON_START` | `true` | Create or update the tables at start |
 | `VOCABULARY_TTL_SECONDS` | `2` | How long a running service uses a workspace's vocabulary before checking for a newer version |
 | `LOG_LEVEL` | `INFO` | Logs are JSON, one object per line |
