@@ -7,17 +7,19 @@ another instance of the service is picked up within that time.
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from likho_hinglish import Transliterator
 from likho_language.ids import new_id
-from likho_language.models import GlossaryTerm, LanguagePolicy, Spelling, VocabularyVersion
+from likho_language.models import GlossaryTerm, LanguagePolicy, Spelling, SpellingExample, VocabularyVersion
 from likho_language.policy import PolicyRule
+from likho_language.usage import Matcher
 
 
 class NotFoundError(LookupError):
@@ -36,6 +38,9 @@ class Vocabulary:
     transliterator: Transliterator
     terms: tuple[tuple[str, str], ...]  # (term, language) of enabled glossary entries, oldest first
     rules: tuple[PolicyRule, ...]
+    # Find the enabled terms and spelling sources in a transcript line (by id), for the counts.
+    term_matcher: Matcher
+    spelling_matcher: Matcher
 
     def hotwords(self, language: str = "") -> list[str]:
         """Glossary names for one language, or all of them when no language is given."""
@@ -56,9 +61,12 @@ def _clean(value: str, what: str) -> str:
 
 
 class VocabularyStore:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], ttl_seconds: float = 2.0) -> None:
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], ttl_seconds: float = 2.0, examples_per_spelling: int = 3
+    ) -> None:
         self._sessions = sessions
         self._ttl = ttl_seconds
+        self._examples = examples_per_spelling
         self._cache: dict[str, _Cached] = {}
 
     # ------------------------------------------------------------------ reading
@@ -87,14 +95,14 @@ class VocabularyStore:
     async def _load(session: AsyncSession, workspace_id: str, version: int) -> Vocabulary:
         spellings = (
             await session.execute(
-                select(Spelling.source, Spelling.target).where(
+                select(Spelling.id, Spelling.source, Spelling.target).where(
                     Spelling.workspace_id == workspace_id, Spelling.enabled.is_(True)
                 )
             )
         ).all()
         terms = (
             await session.execute(
-                select(GlossaryTerm.term, GlossaryTerm.language)
+                select(GlossaryTerm.id, GlossaryTerm.term, GlossaryTerm.language)
                 .where(GlossaryTerm.workspace_id == workspace_id, GlossaryTerm.enabled.is_(True))
                 .order_by(GlossaryTerm.id)
             )
@@ -108,11 +116,13 @@ class VocabularyStore:
         ).all()
         return Vocabulary(
             version=version,
-            transliterator=Transliterator({source: target for source, target in spellings}),
-            terms=tuple((term, language) for term, language in terms),
+            transliterator=Transliterator({source: target for _, source, target in spellings}),
+            terms=tuple((term, language) for _, term, language in terms),
             rules=tuple(
                 PolicyRule(p.detected_language, p.min_probability, p.decode_as, p.transliterate) for p in policies
             ),
+            term_matcher=Matcher((term_id, term) for term_id, term, _ in terms),
+            spelling_matcher=Matcher((spelling_id, source) for spelling_id, source, _ in spellings),
         )
 
     async def list_glossary(self, workspace_id: str) -> Sequence[GlossaryTerm]:
@@ -130,6 +140,86 @@ class VocabularyStore:
                     select(Spelling).where(Spelling.workspace_id == workspace_id).order_by(Spelling.id)
                 )
             ).all()
+
+    async def list_examples(self, workspace_id: str) -> dict[str, list[SpellingExample]]:
+        """The last lines each spelling was applied to, newest first, by spelling id."""
+        async with self._sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(SpellingExample)
+                    .where(SpellingExample.workspace_id == workspace_id)
+                    .order_by(SpellingExample.heard_at.desc(), SpellingExample.id.desc())
+                )
+            ).all()
+        examples: dict[str, list[SpellingExample]] = {}
+        for row in rows:
+            examples.setdefault(row.spelling_id, []).append(row)
+        return examples
+
+    # ------------------------------------------------------------------ counting
+    async def count_line(
+        self,
+        workspace_id: str,
+        recording_id: str,
+        segment_index: int,
+        text_script: str,
+        text_roman: str,
+        heard_at: datetime,
+    ) -> tuple[int, int]:
+        """Counts the terms and spellings heard in one transcript line; returns how many of each."""
+        vocabulary = await self.get(workspace_id)
+        # A term in the script of the audio is in layer 1; an English term may be in either layer.
+        term_ids = vocabulary.term_matcher.find(text_script) | vocabulary.term_matcher.find(text_roman)
+        spelling_ids = vocabulary.spelling_matcher.find(text_script)
+        if not term_ids and not spelling_ids:
+            return 0, 0
+        async with self._sessions() as session, session.begin():
+            if term_ids:
+                await session.execute(
+                    update(GlossaryTerm)
+                    .where(GlossaryTerm.workspace_id == workspace_id, GlossaryTerm.id.in_(term_ids))
+                    .values(heard=GlossaryTerm.heard + 1, last_heard_at=heard_at)
+                )
+            if spelling_ids:
+                await session.execute(
+                    update(Spelling)
+                    .where(Spelling.workspace_id == workspace_id, Spelling.id.in_(spelling_ids))
+                    .values(applied=Spelling.applied + 1, last_applied_at=heard_at)
+                )
+                # The same line delivered twice is one example.
+                await session.execute(
+                    insert(SpellingExample)
+                    .values(
+                        [
+                            {
+                                "id": new_id("exm"),
+                                "workspace_id": workspace_id,
+                                "spelling_id": spelling_id,
+                                "recording_id": recording_id,
+                                "segment_index": segment_index,
+                                "before": text_script,
+                                "after": text_roman,
+                                "heard_at": heard_at,
+                            }
+                            for spelling_id in spelling_ids
+                        ]
+                    )
+                    .on_conflict_do_nothing(constraint="uq_example_spelling_line")
+                )
+                for spelling_id in spelling_ids:
+                    keep = (
+                        select(SpellingExample.id)
+                        .where(SpellingExample.spelling_id == spelling_id)
+                        .order_by(SpellingExample.heard_at.desc(), SpellingExample.id.desc())
+                        .limit(self._examples)
+                    )
+                    await session.execute(
+                        delete(SpellingExample).where(
+                            SpellingExample.spelling_id == spelling_id,
+                            SpellingExample.id.not_in(keep.scalar_subquery()),
+                        )
+                    )
+        return len(term_ids), len(spelling_ids)
 
     # ------------------------------------------------------------------ writing
     async def _bump(self, session: AsyncSession, workspace_id: str) -> int:
@@ -238,11 +328,83 @@ class VocabularyStore:
             )
             if deleted is None:
                 raise NotFoundError(f"spelling {spelling_id} not found")
+            await session.execute(delete(SpellingExample).where(SpellingExample.spelling_id == spelling_id))
             return await self._bump(session, workspace_id)
+
+    # ------------------------------------------------------------------ importing
+    async def import_glossary(
+        self, workspace_id: str, entries: Iterable[tuple[str, str, bool, str]]
+    ) -> tuple[int, int, int]:
+        """Many terms at once: (term, language, enabled, note) each; returns (added, updated, version).
+
+        A term already there (same text) is updated; the last of two equal terms in the input wins.
+        Nothing is written, and the version stays, when the input is empty.
+        """
+        wanted: dict[str, tuple[str, bool, str]] = {}
+        for term, language, enabled, note in entries:
+            wanted[_clean(term, "term")] = (language.strip().lower() or "hi", enabled, note.strip())
+        if not wanted:
+            return 0, 0, 0
+        added = updated = 0
+        async with self._sessions() as session, session.begin():
+            existing = {
+                row.term: row
+                for row in (
+                    await session.scalars(
+                        select(GlossaryTerm).where(
+                            GlossaryTerm.workspace_id == workspace_id, GlossaryTerm.term.in_(wanted)
+                        )
+                    )
+                ).all()
+            }
+            for term, (language, enabled, note) in wanted.items():
+                row = existing.get(term)
+                if row is None:
+                    row = GlossaryTerm(id=new_id("gls"), workspace_id=workspace_id, term=term)
+                    session.add(row)
+                    added += 1
+                else:
+                    updated += 1
+                row.language, row.enabled, row.note = language, enabled, note
+            await session.flush()
+            version = await self._bump(session, workspace_id)
+        return added, updated, version
+
+    async def import_spellings(
+        self, workspace_id: str, entries: Iterable[tuple[str, str, bool]]
+    ) -> tuple[int, int, int]:
+        """Many spellings at once: (source, target, enabled) each; returns (added, updated, version)."""
+        wanted: dict[str, tuple[str, bool]] = {}
+        for source, target, enabled in entries:
+            wanted[_clean(source, "source")] = (_clean(target, "target"), enabled)
+        if not wanted:
+            return 0, 0, 0
+        added = updated = 0
+        async with self._sessions() as session, session.begin():
+            existing = {
+                row.source: row
+                for row in (
+                    await session.scalars(
+                        select(Spelling).where(Spelling.workspace_id == workspace_id, Spelling.source.in_(wanted))
+                    )
+                ).all()
+            }
+            for source, (target, enabled) in wanted.items():
+                row = existing.get(source)
+                if row is None:
+                    row = Spelling(id=new_id("spl"), workspace_id=workspace_id, source=source)
+                    session.add(row)
+                    added += 1
+                else:
+                    updated += 1
+                row.target, row.enabled, row.is_phrase = target, enabled, " " in source
+            await session.flush()
+            version = await self._bump(session, workspace_id)
+        return added, updated, version
 
     async def delete_workspace(self, workspace_id: str) -> None:
         """Remove everything a workspace stored here (used by tests and when a workspace is deleted)."""
         async with self._sessions() as session, session.begin():
-            for table in (GlossaryTerm, Spelling, LanguagePolicy, VocabularyVersion):
+            for table in (SpellingExample, GlossaryTerm, Spelling, LanguagePolicy, VocabularyVersion):
                 await session.execute(delete(table).where(table.workspace_id == workspace_id))
         self._cache.pop(workspace_id, None)

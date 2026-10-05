@@ -39,3 +39,11 @@ class Settings(BaseSettings):
     migrate_on_start: bool = True
     # How long a worker may keep using a workspace's vocabulary before checking for a newer version.
     vocabulary_ttl_seconds: float = 2.0
+
+    # Count the terms and spellings heard in the lines the workers publish (likho.live.segment).
+    consumers_enabled: bool = True
+    # Instances with the same name share the lines; "new" starts at the lines published from now on.
+    segment_durable: str = "likho-language-segment"
+    segment_start: str = "all"
+    # How many of the last lines a spelling was applied to are kept as examples.
+    examples_per_spelling: int = 3

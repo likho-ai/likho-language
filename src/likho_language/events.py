@@ -77,6 +77,11 @@ class NatsPublisher:
     def connected(self) -> bool:
         return self._nc is not None and self._nc.is_connected
 
+    @property
+    def js(self) -> Any:
+        """The JetStream context, for consumers; None while not connected."""
+        return self._js
+
     async def close(self) -> None:
         if self._nc is not None:
             await self._nc.drain()

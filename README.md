@@ -1,6 +1,6 @@
 # likho-language
 
-The language service of [Likho](https://github.com/likho-ai). It answers four questions for
+The language service of [Likho](https://github.com/likho-ai). It answers five questions for
 the other services:
 
 | Question | Call |
@@ -8,7 +8,8 @@ the other services:
 | How is this line written in Hinglish? | `Transliterate`, `TransliterateBatch` |
 | Which names should the speech model listen for? | `GetHotwords` |
 | The model detected Urdu with probability 0.9: which language do we decode as? | `ResolveDecodePolicy` |
-| What are this workspace's glossary and spellings? | `List…`, `Upsert…`, `Delete…` for glossary terms and spellings |
+| What are this workspace's glossary and spellings? | `List…`, `Upsert…`, `Delete…` for glossary terms and spellings; `ImportGlossaryTerms`, `ImportSpellings` for many at once |
+| How often was each of them heard? | `heard` / `applied` and the last lines on each entry of `ListGlossaryTerms` / `ListSpellings` |
 
 The interface is `likho.language.v1.LanguageService` in
 [likho-contracts](https://github.com/likho-ai/likho-contracts). Everything is scoped to a
@@ -92,6 +93,10 @@ ConfigMaps and Secrets.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | empty | Also push the metrics there (OTLP/HTTP); `GET /metrics` (calls by method and outcome with how long they took) is always on |
 | `MIGRATE_ON_START` | `true` | Create or update the tables at start |
 | `VOCABULARY_TTL_SECONDS` | `2` | How long a running service uses a workspace's vocabulary before checking for a newer version |
+| `CONSUMERS_ENABLED` | `true` | Count the terms and spellings heard in the lines the workers publish |
+| `SEGMENT_DURABLE` | `likho-language-segment` | The durable consumer of `likho.live.segment`; instances with the same name share the lines |
+| `SEGMENT_START` | `all` | `new` starts at the lines published from now on |
+| `EXAMPLES_PER_SPELLING` | `3` | How many of the last lines a spelling was applied to are kept |
 | `LOG_LEVEL` | `INFO` | Logs are JSON, one object per line |
 
 ## Behaviour worth knowing
@@ -102,7 +107,16 @@ ConfigMaps and Secrets.
   subject `likho.vocabulary.updated`. If the bus is down the change is still saved; callers
   notice the new version in the next reply.
 * **Adding is idempotent.** Upserting without an id creates the entry, or updates the one
-  with the same text. The seed command can therefore run twice.
+  with the same text. The seed command can therefore run twice. An import (`ImportGlossaryTerms`,
+  `ImportSpellings`) does the same for many entries in one transaction: one new version, one event.
+* **Counts.** Every transcript line the workers publish (`likho.live.segment`, with the
+  recording's workspace) is read by a durable consumer. A glossary term found in the line as a
+  whole word or phrase, in either layer, regardless of case, raises its `heard`; a spelling whose
+  source is in the line raises its `applied` and keeps the line as one of its last few before/after
+  examples. Counts are lines heard: a recording transcribed twice counts twice, and a line
+  redelivered after a crash may count twice. They guide a person; they are not an audit.
+* **Phrases.** A glossary term or a spelling source with spaces is a phrase (`is_phrase`), matched
+  as a whole; a phrase glossary term reaches the speech model as a multi-word hotword.
 * **`enabled`.** A new entry is always switched on. The flag in a request is used only when
   an id is given (a proto3 bool cannot tell "not set" from false).
 * **Errors.** `INVALID_ARGUMENT` (missing workspace, empty text, a rename that would
@@ -112,7 +126,8 @@ ConfigMaps and Secrets.
 ## Data
 
 PostgreSQL database `likho_language`, migrations in `src/likho_language/migrations`:
-`glossary_terms`, `spellings`, `language_policies`, `vocabulary_versions`.
+`glossary_terms` (with `heard`, `last_heard_at`), `spellings` (with `applied`, `last_applied_at`),
+`spelling_examples`, `language_policies`, `vocabulary_versions`.
 
 The default language policy, used until a workspace defines its own rules: English with
 probability 0.80 or more is decoded as English and not transliterated; everything else,
@@ -122,8 +137,8 @@ including Urdu, is decoded as Hindi and transliterated.
 
 ```bash
 uv run ruff check . && uv run ruff format --check . && uv run mypy
-uv run pytest                                  # 83 tests
-uv run pytest -m "not integration"             # 59 tests that need no stack
+uv run pytest                                  # 93 tests
+uv run pytest -m "not integration"             # 67 tests that need no stack
 ```
 
 The integration tests start the real service on free ports and call it over gRPC against
@@ -134,5 +149,5 @@ and removes it afterwards.
 ## Not here yet
 
 * Calls to edit the language policy (the table exists; rules are read from it).
-* Metrics (`/metrics`) and tracing.
+* Tracing.
 * The contracts package has no `py.typed` marker yet, so its messages are untyped for mypy.

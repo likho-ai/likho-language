@@ -20,6 +20,7 @@ from likho_language.grpc_server import LanguageServicer
 from likho_language.health import start_health_server
 from likho_language.metrics import MetricsInterceptor, shared
 from likho_language.settings import Settings
+from likho_language.usage import SegmentConsumer
 from likho_language.vocabulary import VocabularyStore
 
 log = logging.getLogger("likho_language")
@@ -57,7 +58,11 @@ async def serve(settings: Settings, stop: asyncio.Event | None = None) -> None:
         log.info("database is up to date")
 
     engine = make_engine(settings.database_url)
-    store = VocabularyStore(make_sessions(engine), ttl_seconds=settings.vocabulary_ttl_seconds)
+    store = VocabularyStore(
+        make_sessions(engine),
+        ttl_seconds=settings.vocabulary_ttl_seconds,
+        examples_per_spelling=settings.examples_per_spelling,
+    )
 
     metrics = shared(__version__, settings.otel_exporter_otlp_endpoint)
     publisher = NatsPublisher(settings.nats_url)
@@ -67,6 +72,12 @@ async def serve(settings: Settings, stop: asyncio.Event | None = None) -> None:
     except Exception:
         # The service still answers; a change is then visible through the version in each response.
         log.exception("event bus not reachable at %s; changes will not be announced", settings.nats_url)
+
+    counting: asyncio.Task[None] | None = None
+    if settings.consumers_enabled and publisher.connected:
+        consumer = SegmentConsumer(publisher.js, store, settings.segment_durable, settings.segment_start, metrics)
+        await consumer.start()
+        counting = asyncio.create_task(consumer.run(stop))
 
     server = grpc.aio.server(
         options=[("grpc.max_receive_message_length", 8 * 1024 * 1024)],
@@ -95,6 +106,8 @@ async def serve(settings: Settings, stop: asyncio.Event | None = None) -> None:
     await server.stop(grace=10)
     http.close()
     await http.wait_closed()
+    if counting is not None:
+        await counting
     await publisher.close()
     await engine.dispose()
     await asyncio.to_thread(metrics.flush)

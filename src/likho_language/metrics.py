@@ -69,6 +69,8 @@ class Metrics:
         )
         #: Events taken from the bus, by subject and outcome.
         self.events_handled = meter.create_counter("likho_language_events_handled", description="Events handled")
+        #: Transcript lines looked at for the vocabulary, by outcome (hit: a term or spelling was in it).
+        self.lines = meter.create_counter("likho_language_lines", description="Transcript lines heard")
 
     def scrape(self) -> tuple[str, bytes]:
         """The Prometheus text and its content type."""

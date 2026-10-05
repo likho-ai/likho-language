@@ -23,6 +23,13 @@ class GlossaryTerm(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # How many transcript lines contained the term, and when the last one was heard.
+    heard: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_heard_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def is_phrase(self) -> bool:
+        return " " in self.term
 
 
 class Spelling(Base):
@@ -38,6 +45,27 @@ class Spelling(Base):
     is_phrase: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # How many transcript lines the spelling was applied to, and when the last one was heard.
+    applied: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SpellingExample(Base):
+    """One of the last lines a spelling was applied to: what the model wrote, and what came out."""
+
+    __tablename__ = "spelling_examples"
+    __table_args__ = (
+        UniqueConstraint("spelling_id", "recording_id", "segment_index", name="uq_example_spelling_line"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(40), index=True)
+    spelling_id: Mapped[str] = mapped_column(String(40))
+    recording_id: Mapped[str] = mapped_column(String(40))
+    segment_index: Mapped[int] = mapped_column(Integer)
+    before: Mapped[str] = mapped_column(Text)
+    after: Mapped[str] = mapped_column(Text)
+    heard_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class LanguagePolicy(Base):

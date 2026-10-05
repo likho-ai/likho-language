@@ -50,6 +50,8 @@ async def service() -> AsyncIterator[Service]:
         grpc_port=_free_port(),
         http_port=_free_port(),
         vocabulary_ttl_seconds=0,  # every call sees the latest version, so tests need no sleeps
+        segment_durable="test-" + new_id("lang")[-12:].lower(),  # this run's own consumer of the lines
+        segment_start="new",
         log_level="WARNING",
     )
     # postgresql+asyncpg://user:pass@host:port/db  and  nats://host:port
@@ -85,6 +87,16 @@ async def service() -> AsyncIterator[Service]:
     await engine.dispose()
     stop.set()
     await asyncio.wait_for(task, timeout=30)
+    # The durable consumer would otherwise stay on the server, holding this run's lines.
+    import nats
+
+    connection = await nats.connect(settings.nats_url)
+    try:
+        await connection.jetstream().delete_consumer("LIKHO_LIVE", settings.segment_durable)
+    except Exception:
+        pass
+    finally:
+        await connection.close()
 
 
 @pytest_asyncio.fixture(loop_scope="session")

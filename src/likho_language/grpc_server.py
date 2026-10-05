@@ -1,16 +1,18 @@
 """likho.language.v1.LanguageService over gRPC."""
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import datetime
 from typing import Any
 
 import grpc
+from google.protobuf.timestamp_pb2 import Timestamp
 from likho.common.v1 import common_pb2
 from likho.language.v1 import language_pb2, language_pb2_grpc
 
 from likho_language import policy
 from likho_language.events import Publisher
-from likho_language.models import GlossaryTerm, Spelling
+from likho_language.models import GlossaryTerm, Spelling, SpellingExample
 from likho_language.vocabulary import InvalidError, NotFoundError, VocabularyStore
 
 log = logging.getLogger(__name__)
@@ -20,15 +22,47 @@ log = logging.getLogger(__name__)
 _UNSUPPORTED = {common_pb2.SCRIPT_ARABIC: "Arabic script"}
 
 
+def _when(value: datetime | None) -> Timestamp | None:
+    if value is None:
+        return None
+    stamp = Timestamp()
+    stamp.FromDatetime(value)
+    return stamp
+
+
 def _term(row: GlossaryTerm) -> language_pb2.GlossaryTerm:
     return language_pb2.GlossaryTerm(
-        id=row.id, term=row.term, language=row.language, enabled=row.enabled, note=row.note
+        id=row.id,
+        term=row.term,
+        language=row.language,
+        enabled=row.enabled,
+        note=row.note,
+        is_phrase=row.is_phrase,
+        heard=row.heard,
+        last_heard_at=_when(row.last_heard_at),
     )
 
 
-def _spelling(row: Spelling) -> language_pb2.Spelling:
+def _example(row: SpellingExample) -> language_pb2.SpellingExample:
+    return language_pb2.SpellingExample(
+        recording_id=row.recording_id,
+        segment_index=row.segment_index,
+        before=row.before,
+        after=row.after,
+        heard_at=_when(row.heard_at),
+    )
+
+
+def _spelling(row: Spelling, examples: Sequence[SpellingExample] = ()) -> language_pb2.Spelling:
     return language_pb2.Spelling(
-        id=row.id, source=row.source, target=row.target, is_phrase=row.is_phrase, enabled=row.enabled
+        id=row.id,
+        source=row.source,
+        target=row.target,
+        is_phrase=row.is_phrase,
+        enabled=row.enabled,
+        applied=row.applied,
+        last_applied_at=_when(row.last_applied_at),
+        examples=[_example(example) for example in examples],
     )
 
 
@@ -141,13 +175,36 @@ class LanguageServicer(language_pb2_grpc.LanguageServiceServicer):
         await self._publisher.vocabulary_updated(workspace_id, "glossary", version)
         return language_pb2.DeleteGlossaryTermResponse()
 
+    async def ImportGlossaryTerms(
+        self, request: language_pb2.ImportGlossaryTermsRequest, context: grpc.aio.ServicerContext
+    ) -> language_pb2.ImportGlossaryTermsResponse:
+        workspace_id = await self._workspace(request, context)
+        entries = [(t.term, t.language, t.enabled, t.note) for t in request.terms]
+        added, updated, version = await self._guard(context, lambda: self._store.import_glossary(workspace_id, entries))
+        if added or updated:
+            await self._publisher.vocabulary_updated(workspace_id, "glossary", version)
+        return language_pb2.ImportGlossaryTermsResponse(added=added, updated=updated, vocabulary_version=version)
+
     # ------------------------------------------------------------------ spellings
     async def ListSpellings(
         self, request: language_pb2.ListSpellingsRequest, context: grpc.aio.ServicerContext
     ) -> language_pb2.ListSpellingsResponse:
         workspace_id = await self._workspace(request, context)
         rows = await self._store.list_spellings(workspace_id)
-        return language_pb2.ListSpellingsResponse(spellings=[_spelling(row) for row in rows])
+        examples = await self._store.list_examples(workspace_id)
+        return language_pb2.ListSpellingsResponse(spellings=[_spelling(row, examples.get(row.id, ())) for row in rows])
+
+    async def ImportSpellings(
+        self, request: language_pb2.ImportSpellingsRequest, context: grpc.aio.ServicerContext
+    ) -> language_pb2.ImportSpellingsResponse:
+        workspace_id = await self._workspace(request, context)
+        entries = [(s.source, s.target, s.enabled) for s in request.spellings]
+        added, updated, version = await self._guard(
+            context, lambda: self._store.import_spellings(workspace_id, entries)
+        )
+        if added or updated:
+            await self._publisher.vocabulary_updated(workspace_id, "spellings", version)
+        return language_pb2.ImportSpellingsResponse(added=added, updated=updated, vocabulary_version=version)
 
     async def UpsertSpelling(
         self, request: language_pb2.UpsertSpellingRequest, context: grpc.aio.ServicerContext
